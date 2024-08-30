@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<title>MQTT Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="jquery-1.12.4.min.js" type="text/javascript"></script>
+<script src="mqttws31.js" type="text/javascript"></script>
+
+<style>
+* {
+	outline-style: none;
+	font-family: "Verdana", "Tahoma", sans-serif;
+}
+html {
+	overflow-y: scroll;
+}
+body {
+	background-color: white;
+	font-size: 10pt;
+	margin-top: 80px;
+	margin-bottom: 80px;
+}
+img {
+	border: 0px;
+}
+label {
+	padding: 6px;
+	white-space: nowrap;
+}
+input {
+	height: 20px;
+	margin: 6px;
+	padding: 6px;
+	border: 0px;
+	border-bottom: 1px solid black;
+	box-sizing: border-box;
+	vertical-align: middle;
+}
+input:disabled {
+	border-bottom: 1px solid lightgrey;
+	background-color: inherit;
+}
+button {
+	cursor: pointer;
+	width: 120px;
+	margin: 4px 12px;
+	padding: 4px;
+	font-weight: bold;
+	border: 1px solid black;
+	border-radius: 4px;
+}
+button:disabled {
+	cursor: default;
+}
+div#page_top {
+	top: 0px;
+	left: 0px;
+	width: 100%;
+	position: fixed;
+	z-index: 20;
+	x_padding: 2px;
+	color: #ffffff;
+	background-color: #00a0f0;
+	font-size: 8pt;
+}
+div#page_top table {
+	width: 100%;
+}
+div#page_top #logo {
+	padding: 2px 24px;
+	text-align: right;
+}
+div#page_top #text {
+	padding: 2px 24px;
+	text-align: left;
+}
+div#page_top #title {
+	font-size: 16pt;
+	font-weight: bold;
+}
+fieldset {
+	margin: 4px 12px;
+	border: 0px;
+}
+fieldset fieldset {
+	margin: 0px;
+	padding: 0px;
+	border: 0px;
+}
+fieldset legend {
+	font-size: 12pt;
+	font-weight: bold;
+	color: #00a0f0;
+}
+fieldset fieldset button {
+	width: auto;
+	margin: 6px;
+	font-size: 9pt;
+	font-weight: normal;
+	border: 1px none darkgrey;
+}
+div#list_subscribe {
+	display: inline-block;
+}
+span#connection_status {
+	color: #0090f0;
+	font-size: 8pt;
+}
+table#subscribe_msg {
+	width: 100%;
+	border: 1px solid darkgrey;
+	border-radius: 4px;
+	border-spacing: 0px;
+	table-layout: fixed;
+}
+table#subscribe_msg td {
+	padding: 4px;
+	word-wrap: break-word;
+}
+table#subscribe_msg thead {
+	background-color: lightgrey;
+	font-weight: bold;
+}
+table#subscribe_msg thead td {
+	white-space: nowrap;
+}
+table#subscribe_msg tbody {
+	font-size: 8pt;
+}
+table#subscribe_msg td:nth-child(1) {
+	width: 15%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+table#subscribe_msg td:nth-child(2) {
+	width: 30%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+table#subscribe_msg td:nth-child(3) {
+}
+table#subscribe_msg tbody tr:nth-child(even) {
+	background-color: whitesmoke;
+}
+</style>
+
+<script type="text/javascript">
+var mqtt;
+
+function MQTTconnect() {
+	var host;
+	var port;
+	var socketSSL = false;
+	var username = null;
+	var password = null;
+
+	host = $("#host").val();
+	if( host == "" ) host = "localhost";
+	$("#host").val( host );
+
+	port = parseInt( $("#port").val() );
+	if( isNaN( port ) || port <= 0 || port >= 65535 ) port = 10080;
+	$("#port").val( port );
+
+	if( $("#socketSSL").is(":checked") ) socketSSL = true;
+
+	username = $("#username").val();
+	password = $("#password").val();
+
+	if (typeof(Storage) !== "undefined") {
+		localStorage.setItem( "mqtt_host",      $("#host").val() );
+		localStorage.setItem( "mqtt_port",      $("#port").val() );
+		localStorage.setItem( "mqtt_socketSSL", $("#socketSSL").is(":checked") );
+		localStorage.setItem( "mqtt_username",  $("#username").val() );
+	};
+
+	mqtt = new Paho.MQTT.Client(
+			host, port, "/mqtt",
+			"web_" + parseInt(Math.random() * 10000, 10)
+	);
+	var options = {
+		timeout: 10,
+		useSSL: socketSSL,
+		cleanSession: true,
+		onSuccess: onConnect,
+		onFailure: function( message ) {
+			$("#connection_status").hide().text( "connection failed: " + message.errorMessage ).fadeIn();
+			$("#broker_config").removeAttr( "disabled" );
+			$("#cmd_connect").removeAttr( "disabled" );
+		}
+	};
+
+	if( username != "" ) {
+		options.userName = username;
+		options.password = password;
+	};
+
+	mqtt.onConnectionLost = onConnectionLost;
+	mqtt.onMessageArrived = onMessageArrived;
+
+	mqtt.connect( options );
+};
+
+function onConnect() {
+	$("#connection_status").hide().text( "connection open" ).fadeIn();
+	$("#cmd_connect").html( "Disconnect");
+	$("#cmd_connect").removeAttr( "disabled" );
+	$("#cmd_publish").removeAttr( "disabled" );
+	$("#cmd_subscribe").removeAttr( "disabled" );
+	$("#subscribe_msg tbody").empty();
+};
+
+function onConnectionLost( response ) {
+	$("#connection_status").hide().text( "connection close: " + response.errorMessage ).fadeIn();
+	$("#broker_config").removeAttr( "disabled" );
+	$("#cmd_connect").html( "Connect");
+	$("#cmd_connect").removeAttr( "disabled" );
+	$("#cmd_publish").attr( "disabled", "disabled" );
+	if( $("#cmd_subscribe").html() == "Unsubscribe" ) {
+		$("#subscribe_config").removeAttr( "disabled" );
+		$("#cmd_subscribe").html( "Subscribe" );
+	};
+	$("#cmd_subscribe").attr( "disabled", "disabled" );
+};
+
+function onMessageArrived( message ) {
+	var recv_topic = message.destinationName;
+	var recv_payload = message.payloadString;
+
+	$("<tr><td>" + formatDate() + "</td><td>" + recv_topic + "</td><td>" + recv_payload + "</td></tr>")
+		.hide()
+		.prependTo("#subscribe_msg tbody")
+		.fadeIn("fast");
+	if( $("#subscribe_msg tbody tr").length > 50 ) $("#subscribe_msg tbody tr:last").remove();
+};
+
+
+$(document).ready(function() {
+	$("#cmd_publish").attr( "disabled", "disabled" );
+	$("#cmd_subscribe").attr( "disabled", "disabled" );
+	$("#host").focus();
+	if( typeof(Storage) !== "undefined" ) {
+		$("#host").val( localStorage.getItem("mqtt_host") );
+		$("#port").val( localStorage.getItem("mqtt_port") );
+		if( localStorage.getItem("mqtt_socketSSL") == "true" ) $("#socketSSL").attr( "checked", "true" );
+		$("#username").val( localStorage.getItem("mqtt_username") );
+		$("#topic_publish").val( localStorage.getItem("mqtt_topic") );
+		$("#text_publish").val( localStorage.getItem("mqtt_message") );
+		var subsTopics = subsTopics = JSON.parse( localStorage.getItem( "mqtt_subscribe" ) );
+		if( subsTopics instanceof Array ) {
+			subsTopics.forEach( function( item, index ) {
+				$("#list_subscribe").append(
+					"<label id=\"item_topic\">" +
+					"Topic<input type=\"text\" id=\"text_topic\" size=\"40\"/>" +
+					"<button id=\"cmd_delTopic\">Delete</button><br/>" +
+					"</label>" );
+				$("#list_subscribe #text_topic").last().val( item );
+			} );
+		};
+	};
+
+	$("#cmd_connect").click( function() {
+		if( $("#cmd_connect").html() == "Connect" ) {
+			$("#broker_config").attr( "disabled", "disabled" );
+			$("#cmd_connect").attr( "disabled", "disabled" );
+			$("#connection_status").hide().html( "connecting..." ).fadeIn();
+        		MQTTconnect();
+		} else if( $("#cmd_connect").html() == "Disconnect" ) {
+			$("#cmd_connect").attr( "disabled", "disabled" );
+			$("#connection_status").hide().html( "disconnecting..." ).fadeIn();
+			mqtt.disconnect();
+		};
+	} );
+
+	$("#cmd_publish").click( function() {
+		$("#cmd_publish").attr( "disabled", "disabled" );
+		if (typeof(Storage) !== "undefined") {
+			localStorage.setItem( "mqtt_topic",     $("#topic_publish").val() );
+			localStorage.setItem( "mqtt_message",   $("#text_publish").val() );
+		};
+		var message = new Paho.MQTT.Message( $("#text_publish").val() );
+		message.destinationName = $("#topic_publish").val();
+		message.qos = 0;
+		mqtt.send( message );
+		$("#cmd_publish").removeAttr( "disabled" );
+	} );
+
+	$("#cmd_addTopic").click( function() {
+		if( $("#list_subscribe #item_topic").length >= 10 ) return;
+		$("#list_subscribe").append(
+			"<label id=\"item_topic\">" +
+			"Topic<input type=\"text\" id=\"text_topic\" size=\"40\"/>" +
+			"<button id=\"cmd_delTopic\">Delete</button><br/>" +
+			"</label>" );
+		storageSubscribe();
+	} );
+
+	$("#list_subscribe").on( "click", "#cmd_delTopic", function() {
+		$("#list_subscribe #item_topic").eq( $( this ).parent().index() ).remove();
+		storageSubscribe();
+	} );
+
+	$("#cmd_subscribe").click( function() {
+		if( $("#cmd_subscribe").html() == "Subscribe" ) {
+			storageSubscribe();
+			$("#list_subscribe #item_topic #text_topic").each( function () {
+				var topic = $(this).val();
+				if( topic != "" ) mqtt.subscribe( topic, { qos: 0 } );
+			} );
+			$("#subscribe_config").attr( "disabled", "disabled" );
+			$("#cmd_subscribe").html( "Unsubscribe" );
+		} else if( $("#cmd_subscribe").html() == "Unsubscribe" ) {
+			$("#list_subscribe #item_topic #text_topic").each( function () {
+				var topic = $(this).val();
+				if( topic != "" ) mqtt.unsubscribe( topic );
+			} );
+			$("#subscribe_config").removeAttr( "disabled" );
+			$("#cmd_subscribe").html( "Subscribe" );
+		};
+	} );
+} );
+
+function storageSubscribe() {
+	if( typeof(Storage) !== "undefined" ) {
+		var subsTopics = [];
+		$("#list_subscribe #item_topic #text_topic").each( function () {
+			subsTopics.push( $(this).val() );
+		} );
+		localStorage.setItem( "mqtt_subscribe", JSON.stringify( subsTopics ) );
+	};
+};
+function formatDate() {
+	var d = new Date();
+	return formatDateNumber( d.getDate() )      + "/" +
+		formatDateNumber( d.getMonth() )    + "/" +
+		formatDateNumber( d.getFullYear() ) + " " +
+		formatDateNumber( d.getHours() )    + ":" +
+		formatDateNumber( d.getMinutes() )  + ":" +
+		formatDateNumber( d.getSeconds() );
+};
+function formatDateNumber( myNumber ) {
+	return( myNumber < 10 ? "0" + myNumber : myNumber );
+};
+</script>
+</head>
+
+<body>
+<div id="page_top">
+	<table>
+	<tr>
+		<td id="text"><div id="title">MQTT with websockets</td>
+	</tr>
+	</table>
+</div>
+<fieldset>
+	<legend>Broker Connection</legend>
+	<fieldset id="broker_config">
+		<label>Host<input type="text" id="host" size="30"/></label>
+		<label>Port<input type="text" id="port" size="4"/><input type="checkbox" id="socketSSL">Use SSL</label><br/>
+		<label>Username<input type="text" id="username" size="20"/></label>
+		<label>Password<input type="password" id="password" size="20"/></label>
+	</fieldset>
+	<button id="cmd_connect">Connect</button> <span id="connection_status">connection close</span>
+</fieldset>
+<fieldset id="publish_config">
+	<legend>Publish Message</legend>
+	<label>Topic<input type="text" id="topic_publish" size="40"/></label><br/>
+	<label>Message<input type="text" id="text_publish" size="60"/></label><br/>
+	<button id="cmd_publish">Publish</button>
+</fieldset>
+<fieldset>
+	<legend>Subscribe Topics</legend>
+	<fieldset id="subscribe_config">
+		<div id="list_subscribe"></div>
+		<button id="cmd_addTopic">Add Topic</button>
+	</fieldset>
+	<button id="cmd_subscribe">Subscribe</button>
+	<table id="subscribe_msg">
+	<thead>
+		<tr><td>Date/Time</td><td>Topic</td><td>Message</td></tr>
+	</thead>
+	<tbody></tbody>
+	</table>
+</fieldset>
+</body>
+
+</html>
